@@ -1,0 +1,25 @@
+name: infoh420-a3-8
+
+services:
+  airflow:
+    image: apache/airflow:slim-3.3.2@sha256:881c35bfb1f6b76d233dd402b7228b5c37003702068b865db5db76061458b2bd
+    command: ["airflow", "standalone"]
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      RESEARCH_LIBRARY_PATH: /opt/airflow/ResearchLibrary
+      PAPERS_DB_PATH: ${PAPERS_DB_PATH:-/opt/airflow/data/papers.db}
+    ports:
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
+    volumes:
+      - airflow-state:/opt/airflow
+      - ./dags:/opt/airflow/dags:ro
+      - ./data:/opt/airflow/data
+      - type: bind
+        source: ${RESEARCH_LIBRARY_DIR:?Set RESEARCH_LIBRARY_DIR to the absolute path of ResearchLibrary}
+        target: /opt/airflow/ResearchLibrary
+        bind:
+          create_host_path: false
+
+volumes:
+  airflow-state:

@@ -151,6 +151,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -218,3 +220,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local paper data, including the SQLite database and its sidecar files
+/data/*
+!/data/.gitkeep
+.DS_Store
+
+# Airflow runtime files and credentials
+/airflow/
+/logs/
+/airflow.cfg
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+simple_auth_manager_passwords.json*
+standalone_admin_password.txt
+
+# Local copies of the synced library
+/ResearchLibrary/
