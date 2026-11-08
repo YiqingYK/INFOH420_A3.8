@@ -9,6 +9,7 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
       RESEARCH_LIBRARY_PATH: /opt/airflow/ResearchLibrary
       PAPERS_DB_PATH: ${PAPERS_DB_PATH:-/opt/airflow/data/papers.db}
+      DISCORD_WEBHOOK_API: ${DISCORD_WEBHOOK_API}
     ports:
       - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
     volumes:
