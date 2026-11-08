@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import timedelta
+from html import escape
 from pathlib import Path
 
 import pendulum
@@ -64,6 +65,10 @@ def paper_pipeline():
                     processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            #This is just to input a simple test example into the DB if we haven't yet implemented the LLM->DB flow
+            #Remove when we get all tasks ready and integrated
+            #Put a random PDF into the folder with "example.pdf" title before this
             conn.execute(
             """
             INSERT OR IGNORE INTO processed_papers
@@ -80,12 +85,6 @@ def paper_pipeline():
                     "None",  # category
                 )
             )
-            #conn.executemany(
-            #    "INSERT OR IGNORE INTO processed_papers 
-            #           ('Example.pdf',
-            # ) VALUES (?)",
-            #    [(filename,) for filename in filenames],
-            #)
         logger.info("Discovered %d PDF files in %s: %s", len(filenames), papers_dir, filenames)
         logger.info("Processed-file lookup is pending; discovery does not classify PDFs as new")
         return filenames
@@ -104,13 +103,40 @@ def paper_pipeline():
         return {"status": "pending", "processed_filenames": []}
 
     @task(retries=0)
-    def generate_html(processing_result):
+    def generate_html():
         """MOCK. Await Gustavo's HTML generator."""
-        if not processing_result["processed_filenames"]:
-            raise AirflowSkipException(
-                "MOCK HTML generation skipped: no newly committed paper metadata"
-            )
-        raise AirflowSkipException("MOCK HTML generation: Gustavo's integration is pending")
+
+        library_path = os.environ.get("RESEARCH_LIBRARY_PATH")
+        if not library_path:
+            raise AirflowFailException("RESEARCH_LIBRARY_PATH must be configured")
+        output_dir = Path(library_path) / "output"
+
+        db_path = os.environ.get("PAPERS_DB_PATH")
+        if not db_path:
+            raise AirflowFailException("PAPERS_DB_PATH must be configured")
+        
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            all_files_metadata = conn.execute(
+                f"SELECT * FROM processed_papers"
+            ).fetchall()
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        papers_html = "\n".join(
+            f"<article><h2>{escape(row['title'])}</h2>"
+            f"<p>{escape(row['summary'])}</p>"
+            f"<p>Category: {escape(row['category'] or 'None')}</p></article>"
+            for row in all_files_metadata
+        ) or "<p>No papers found.</p>"
+        output_path = output_dir / "output.html"
+        output_path.write_text(
+            f"<!doctype html><html><head><meta charset=\"utf-8\">"
+            f"<title>Papers</title></head><body><h1>Papers</h1>"
+            f"{papers_html}</body></html>",
+            encoding="utf-8",
+        )
+        logger.info("Generated paper list at %s", output_path)
+        return str(output_path)
 
     @task(retries=0)
     def notify_discord(new_filenames):
@@ -124,35 +150,21 @@ def paper_pipeline():
         if not db_path:
             raise AirflowFailException("PAPERS_DB_PATH must be configured")
 
-        logger.info("db_path: %s",
-                    db_path)
 
         webhook_api = os.environ.get("DISCORD_WEBHOOK_API")
         if not webhook_api:
             raise AirflowFailException("DISCORD_WEBHOOK_API must be configured")
 
-        logger.info("Discord_webhook: %s",
-                    webhook_api)
-
         placeholders = ", ".join("?" for new_file in new_filenames)
         
-        logger.info("Placeholder: %s",
-                    placeholders)
         with sqlite3.connect(db_path) as conn:
-            logger.info("connection successful 1")
             conn.row_factory = sqlite3.Row
-            
-            logger.info("connection successful 2")
             new_files_metadata = conn.execute(
                 f"SELECT * FROM processed_papers WHERE filename IN ({placeholders})",
                 tuple(new_filenames),
             ).fetchall()
 
-            logger.info("%s",", ".join(new_file for new_file in new_filenames))
-        
-            logger.info("%s",new_files_metadata)
-
-#Maybe implement something here about analyzing deletions and renamings
+#Maybe implement something here about analyzing deletions and renamings?
 #        found_filenames = {row["filename"] for row in new_files_metadata}
 #        missing_filenames = set(new_filenames) - found_filenames
 #        if missing_filenames:
@@ -172,10 +184,6 @@ def paper_pipeline():
             )
             if len(content) > 1000:
                 content = content[:987] + "\n[truncated]"
-
-            logger.info("Content for %s: %s\n",
-                        row["filename"],
-                        content)
 
             request = Request(
                 webhook_api,
@@ -201,9 +209,9 @@ def paper_pipeline():
                 raise
             
     processing_result = process_papers(scan_new_papers())
-    generate_html(processing_result)
-    #notify_discord(["example.pdf"])
-    notify_discord(processing_result["processed_filenames"])
+    generate_html()
+    notify_discord(["example.pdf"]) #Only for testing, must first do the setup in scan_new_papers
+    #notify_discord(processing_result["processed_filenames"])
 
 
 paper_pipeline_dag = paper_pipeline()
