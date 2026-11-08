@@ -1,4 +1,4 @@
-"""Discover research PDFs with explicitly pending downstream integrations."""
+"""Discover and process research PDFs; output integrations remain pending."""
 
 import logging
 import os
@@ -7,7 +7,7 @@ from html import escape
 from pathlib import Path
 
 import pendulum
-from airflow.sdk import dag, task
+from airflow.sdk import dag, task, get_current_context
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 import sqlite3
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @dag(
     dag_id="paper_pipeline",
-    description="PDF discovery with pending processing and mock output tasks",
+    description="PDF to Markdown, local LLM metadata and SQLite; pending output tasks",
     schedule="0 * * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
@@ -36,7 +36,7 @@ def paper_pipeline():
         execution_timeout=timedelta(minutes=2),
     )
     def scan_new_papers():
-        """List discovered filenames. Processed-file filtering is still pending."""
+        """List PDFs; storage checks filenames when processing the batch."""
         library_path = os.environ.get("RESEARCH_LIBRARY_PATH")
         if not library_path:
             raise AirflowFailException("RESEARCH_LIBRARY_PATH must be configured")
@@ -86,21 +86,24 @@ def paper_pipeline():
                 )
             )
         logger.info("Discovered %d PDF files in %s: %s", len(filenames), papers_dir, filenames)
-        logger.info("Processed-file lookup is pending; discovery does not classify PDFs as new")
         return filenames
 
     @task(retries=0)
     def process_papers(discovered_filenames):
-        """MOCK. Await Sofía's processed-file lookup and processing/storage module."""
-        if not discovered_filenames:
-            logger.info("MOCK processing: empty discovery batch")
-            return {"status": "empty", "processed_filenames": []}
-        logger.warning(
-            "MOCK processing: %d discovered PDFs await the processed-file lookup "
-            "and processing/storage integration. No PDFs processed.",
-            len(discovered_filenames),
+        """Commit valid metadata and recover this run's prior partial commits."""
+        from paper_processing import process_and_store_papers
+
+        library_path = os.environ.get("RESEARCH_LIBRARY_PATH")
+        db_path = os.environ.get("PAPERS_DB_PATH")
+        if not library_path or not db_path:
+            raise AirflowFailException("RESEARCH_LIBRARY_PATH and PAPERS_DB_PATH are required")
+        context = get_current_context()
+        return process_and_store_papers(
+            discovered_filenames,
+            Path(library_path) / "papers",
+            Path(db_path),
+            batch_id=f"{context['dag'].dag_id}:{context['run_id']}",
         )
-        return {"status": "pending", "processed_filenames": []}
 
     @task(retries=0)
     def generate_html():

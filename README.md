@@ -1,102 +1,79 @@
-# INFOH420_A3.8
-Automated research paper processing pipeline using Apache Airflow, local LLM, SQLite, and Discord.
+# Automated research paper library
 
-## Assignment 3 development setup
+Assignment 3, INFO-H420. Airflow discovers PDFs in a locally synced Google Drive folder. The processing module converts new PDFs to Markdown, calls local Ollama, validates JSON and commits metadata to SQLite outside Drive.
 
-The DAG has an hourly schedule at the top of the hour in UTC, with catchup disabled and at most one active run. Keep it paused until the real integrations are ready. Discovery lists regular PDF files directly inside the configured `papers/` directory, matches extensions case-insensitively, and returns filenames in Python's deterministic alphabetical order. It reads directory entries without opening or changing PDF contents.
+## Current scope
 
-Discovery reports all matching filenames. Determining which filenames are new is **pending Sofía's processed-file lookup**. The processing task is explicitly a mock and returns `{"status": "pending", "processed_filenames": []}` for a nonempty discovery batch, or `{"status": "empty", "processed_filenames": []}` for an empty batch. Both output tasks are explicitly mocks and skip when no metadata has been committed.
+Implemented: scheduled discovery, PDF conversion, local LLM extraction, SQLite storage and integration with the processing task. HTML generation and Discord notifications are still explicit mocks owned by the output integration teammate. The complete assignment is not finished until those integrations and the short report are added.
 
-```text
-Google Drive/
-└── ResearchLibrary/
-    ├── papers/
-    └── output/
-        └── index.html       # Future HTML output
+## Reproducible startup
 
-Local repository/
-├── compose.yaml
-├── .env.example
-├── dags/paper_pipeline.py
-└── data/
-    └── papers.db            # Future application database
-```
+Run commands from this directory (`INFOH420_A3.8`). Install and start Docker Desktop. Make the Drive files available offline and create `ResearchLibrary/papers` and `ResearchLibrary/output`.
 
-### Start Airflow
+1. Copy `.env.example` to `.env` (`Copy-Item .env.example .env` in PowerShell, `cp .env.example .env` on macOS/Linux).
+2. Set `RESEARCH_LIBRARY_DIR` to your absolute host folder. On Windows use forward slashes, for example `"C:/Users/you/Google Drive/ResearchLibrary"`. Keep quotes for spaces. Each teammate uses their own ignored `.env`.
+3. Run `docker compose config --quiet`, then `docker compose up --build -d`.
+4. Follow `docker compose logs -f ollama-init airflow`. First startup downloads the model; allow time and disk space. Ollama uses CPU by default, with no GPU required. Its model cache persists in a named volume. Airflow starts after a successful model download.
+5. Open http://localhost:8080, username `admin`. Read the local generated password with `docker compose exec airflow cat /opt/airflow/simple_auth_manager_passwords.json.generated`.
 
-1. Start Docker Desktop. In your locally synced Google Drive, make sure `ResearchLibrary/papers/` and `ResearchLibrary/output/` exist and are available locally.
-2. Run `cp -n .env.example .env`. In `.env`, set `RESEARCH_LIBRARY_DIR` to the absolute macOS path of your own `ResearchLibrary` folder. Keep quotes around paths with spaces. If Docker Desktop denies the mount, allow file sharing for that directory.
-3. From the repository root, run:
-
-   ```sh
-   docker compose config --quiet
-   docker compose up -d
-   docker compose logs --tail=50 airflow
-   ```
-
-4. Open [Airflow](http://localhost:8080) once startup completes. The username is `admin`. Read the generated password locally with:
-
-   ```sh
-   docker compose exec airflow cat /opt/airflow/simple_auth_manager_passwords.json.generated
-   ```
-
-Set `AIRFLOW_PORT` in `.env` if port 8080 is in use. The UI is bound to the local machine. Compose mounts Google Drive at `/opt/airflow/ResearchLibrary` for future reads from `papers/` and writes to `output/`. `PAPERS_DB_PATH` is a container path under `/opt/airflow/data/`, which maps to the repository's local `data/` directory. Airflow's own metadata and logs live in a separate Docker volume.
-
-### Test discovery and orchestration
+The DAG starts paused, runs hourly in UTC and allows one active run. Keep it paused until HTML and Discord are integrated. For manual checks:
 
 ```sh
 docker compose exec airflow airflow dags list-import-errors
-docker compose exec airflow airflow tasks list paper_pipeline
 docker compose exec airflow airflow dags test paper_pipeline
+docker compose exec airflow python -m unittest discover -s /opt/airflow/tests -v
 ```
 
-Expect discovery and mock processing to succeed, both mock output tasks to be skipped, and the DAG run to succeed. Logs state the discovery count and that processed-file lookup is pending. Both `generate_html` and `notify_discord` receive the processing summary through XCom and wait for successful `process_papers`, which receives the scanner's filename list. The default `all_success` trigger rule prevents either output task from running after failed processing.
+For the test command, first copy the test folder into the container: `docker compose cp tests airflow:/opt/airflow/tests`. Tests create their own temporary PDFs/database and mock Ollama calls. A DAG test processes real PDFs and stores records; output tasks currently skip.
 
-Directory access errors fail discovery and retry twice with exponential backoff starting at 30 seconds, capped at two minutes. Discovery has a two-minute execution timeout. Missing path configuration fails immediately. A missing, inaccessible, or invalid `papers/` directory is an error, distinct from an empty directory. The downstream mocks have zero retries and perform no external work. Before enabling retries for real processing, the team must confirm the idempotency contract below.
+`docker compose down` retains state. Metadata lives at `./data/papers.db`, outside the synced library. Airflow state has a separate volume. Do not commit databases, `.env`, PDFs or generated passwords.
 
-Keep `paper_pipeline` paused while integrations are pending. `airflow dags test` permits manual testing while it is paused. For a smoke test before connecting Drive, point `RESEARCH_LIBRARY_DIR` at a temporary local folder containing empty `papers/` and `output/` directories.
+## Processing module and team API
 
-Run `docker compose down` to stop this project and retain its Airflow state.
+```python
+from pathlib import Path
+from paper_processing import get_processed_filenames, process_and_store_papers
+from paper_processing.database import list_papers
 
-### Provisional integration interfaces
+result = process_and_store_papers(
+    filenames=["paper.pdf"],
+    papers_dir=Path("/opt/airflow/ResearchLibrary/papers"),
+    db_path=Path("/opt/airflow/data/papers.db"),
+    batch_id="manual:example-1",  # same value on retries, new value for a new batch
+)
+```
 
-These signatures are proposals for team confirmation. The repository currently contains no implementation of them. Paths below are container `pathlib.Path` values, derived at task runtime from `RESEARCH_LIBRARY_PATH` and `PAPERS_DB_PATH`. A filename is the exact basename, including its extension and case. The assignment assumes unique filenames.
+Returns `{"status": "complete", "batch_id": "...", "processed_filenames": [...]}` containing all records committed by this batch, including recovered commits on retry. First use initializes the database. Previously committed filenames are skipped without reading the PDF or calling Ollama. Filenames are unique, exact and case sensitive; changing a file under the same filename does not reprocess it. Use a new filename for revised papers.
 
-| Owner and function | Inputs and output | Failure behavior |
-| --- | --- | --- |
-| Sofía — `get_processed_filenames(db_path: Path) -> set[str]` | Returns filenames with successfully committed metadata. Sofía owns database initialization and first-run behavior. | Raise on database access or schema errors. An error must never become an empty processed set. |
-| Sofía — `process_and_store_papers(filenames: list[str], papers_dir: Path, db_path: Path, batch_id: str) -> dict` | Checks stored filenames, processes eligible PDFs, validates metadata, and commits it. Returns `{"status": "complete", "batch_id": "...", "processed_filenames": [...]}`. The list identifies valid committed records belonging to this batch, including commits recovered on retry. | Raise on conversion, LLM, validation, or storage failure. Roll back incomplete writes. Enforce unique filenames, record batch membership durably with each commit, and replay the batch result safely on retry. |
-| Gustavo — `generate_html(db_path: Path, output_path: Path) -> None` | Reads committed metadata and publishes the complete `output/index.html`. Called only after a nonempty batch of newly committed filenames. | Raise on database, rendering, or filesystem errors. Write a temporary file and replace the HTML atomically. Repeated calls must safely regenerate it. |
-| Gustavo — `notify_discord(filenames: list[str], db_path: Path, webhook_url: str, batch_id: str) -> None` | Receives only the batch's newly committed filenames, reads their metadata, and notifies for records still awaiting delivery. Empty batches produce no request. | Raise on unsuccessful responses or transport errors. Check durable delivery state before sending. Agree on handling ambiguous timeouts before adding retries. |
+Each paper commits independently after conversion and validation. If a later paper fails, the exception propagates, completed papers remain committed and downstream tasks do not run. Repeating with the same batch ID recovers earlier commits. An empty batch calls no LLM. The Airflow adapter uses `dag_id:run_id` as the stable identifier. Discovery passes every filename so resumed batches retain their membership; the processing module determines which ones are new.
 
-The batch proposal above replaces the earlier provisional per-paper boolean result because that result alone loses successful commits when a later paper fails. These entry points and durable state requirements still need team agreement.
+Markdown is stored in the same SQLite record, so no extra file can become inconsistent with its metadata. Source PDFs are opened for reading and closed explicitly. Scanned PDFs without extractable text fail with an OCR message; OCR is outside this implementation.
 
-The processing adapter should use the persisted filename lookup to avoid reprocessing and pass the discovered filenames to the batch interface in their existing sorted order. The batch implementation must recheck persisted state on every retry and recover its own previous commits. Use the same `batch_id` across retries, derived from Airflow's `dag_id` and `run_id`. Empty batches return an empty committed list and perform no LLM or notification work. An exception must propagate so HTML and notifications cannot consume a failed batch.
+## LLM configuration
 
-XCom carries only filenames and small status summaries. PDF bytes, Markdown, and full LLM responses stay outside XCom. `max_active_runs=1` prevents overlapping runs of this DAG, while SQLite uniqueness must protect persisted data.
+Compose uses `LOCAL_LLM_BASE_URL=http://ollama:11434`, the native Ollama `/api/generate` endpoint. No API key or cloud account is needed. `.env` configures `LOCAL_LLM_MODEL` (default `qwen2.5:3b`), `LOCAL_LLM_TIMEOUT` in seconds (300) and `LOCAL_LLM_MAX_CHARS` (24000). After changing models, rerun `docker compose up --build -d` so initialization downloads it.
 
-Sofía and Gustavo must agree on durable batch and delivery tracking in the existing local SQLite database before real retries are enabled. If processing fails after some commits, a resumed batch must retain those records for its eventual HTML update and notification. Later DAG runs must also be able to recover abandoned pending deliveries. Successful HTML publication and notification need separate completion markers so either branch can retry independently. HTML reads only valid committed records. If a Discord request times out after the server accepted it, a local sent marker alone cannot guarantee duplicate-free delivery. Keep automatic notification retries disabled until the team agrees on recovery for that case. The current mocks implement none of this durable state.
+The request supplies a JSON schema and disables streaming. Required fields are nonempty strings `title`, `summary`, `category`, and a string array `keywords`. Optional `code_urls` and `dataset_urls` default to empty arrays. Invalid response JSON or field types trigger exactly one further generation; HTTP/transport errors propagate. Optional links are retained only when they are HTTP(S) URLs literally present in the full Markdown. Links are classified by their role in the paper, independently of domain: code can be hosted on GitHub, GitLab, university websites or elsewhere. Classification remains a model judgment; the code does not visit links or prove their contents.
 
-Configuration already available is `RESEARCH_LIBRARY_DIR` (host bind source), `RESEARCH_LIBRARY_PATH` (container library root), `PAPERS_DB_PATH` (container SQLite path), and `AIRFLOW_PORT` (host UI port). Derive `papers/` and `output/index.html` from the container library root. Proposed integration settings are `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`, and secret `DISCORD_WEBHOOK_URL`. These names and any local-server credential need team confirmation and are not yet wired into Compose. Keep actual values in ignored local configuration and never return credentials through XCom.
+Long papers send the first 75% and last 25% of the configured character budget, omitting the middle. The complete Markdown remains stored. This keeps small-model requests bounded but can miss information in the omitted section; character limits do not guarantee a particular token count. Summary quality and performance need checking with the team's real papers.
 
-### Sharing the scaffold
+Implementation references: [Ollama structured outputs](https://ollama.com/blog/structured-outputs), [PyMuPDF4LLM API](https://pymupdf.readthedocs.io/en/latest/pymupdf4llm/api.html).
 
-The intended commit contains `.gitignore`, `.env.example`, `compose.yaml`, `dags/paper_pipeline.py`, `data/.gitkeep`, and this README. Review and stage those files explicitly. Keep `.env`, environment variants, generated passwords, databases and their sidecar files, Airflow runtime folders, and local library copies out of Git. `.env.example` contains a blank host path. Compose uses a named volume for Airflow state, and the actual Google Drive path stays in `.env`.
+## Output integration contract
 
-### Verification on November 7, 2026
+`list_papers(db_path)` returns dictionaries with decoded lists for `keywords`, `code_urls` and `dataset_urls`. The `papers` table also contains `filename`, `title`, `summary`, `category`, `markdown`, `batch_id`, `created_at`, `html_published_at` and `discord_notified_at`. The last two nullable columns are reserved for Gustavo's integrations; this module never marks output as delivered.
 
-Checked the existing running Airflow 3.3.2 container. DAG import reported no errors, and Compose validation passed. Nine Python checks using its installed Airflow package passed, covering the real 11-file directory, extension matching, sorting, directory filtering, empty batches, configuration and filesystem errors, dependency/retry settings, and mock output gating.
+HTML should read all committed records, escape extracted text, and replace `output/index.html` atomically. Discord should read metadata for the batch filenames. Later runs must also recover records with pending output markers from abandoned batches; the current output mocks do not implement that recovery. HTML and Discord completion must be recorded separately. Discord timeouts can be ambiguous, so notification retries remain disabled pending the team's delivery policy. The database is initialized with the current schema; migrations from older schemas are not supported.
 
-Two full `airflow dags test paper_pipeline` runs succeeded, against the real library and a temporary empty library. Both recorded `scan_new_papers=success`, `process_papers=success`, `generate_html=skipped`, and `notify_discord=skipped`. Their persisted XComs contained 11 or zero filenames, respectively, and the pending or empty processing summary.
+XCom contains only filenames and the small processing result. Markdown and full LLM responses never enter XCom. Database uniqueness protects duplicate inserts, and the DAG serializes runs.
 
-A temporary file in the mounted `output/` directory was successfully written, read, and deleted by the Airflow user. All 11 original PDF names, sizes, and modification times were unchanged afterward. The local `data/` directory still contained only `.gitkeep`.
+## Local verification
 
-During the initial checks, every original PDF returned `OSError: [Errno 5] Input/output error` through Docker, preventing content-hash verification. That readability issue was resolved in the follow-up below. Airflow emitted a missing-Graphviz warning during CLI checks. The import and execution checks completed successfully.
+With Python and the pinned dependencies:
 
-### Readability and collaboration follow-up
+```sh
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+```
 
-After the Drive `papers/` folder was made available offline, all 11 PDFs were read to EOF inside the running container in 1 MiB chunks, totaling 50,838,046 bytes. Zero files failed. A second complete chunked read after the tests confirmed identical SHA-256 hashes, filenames, sizes, and modification times.
-
-The existing DAG and Compose configuration required no changes. Import checks, graph validation, case-insensitive discovery and empty-directory fixtures, error propagation, and mock output gating passed. Two fresh full DAG tests succeeded with 11 and zero PDFs. Persisted XComs contained only filenames and small pending/empty summaries, with both output tasks skipped. The DAG remained paused, and `data/` still contained only `.gitkeep`.
-
-The sharing check found exactly the six intended scaffold files, an empty Git staging area, and no local host path, actual webhook URL, or sensitive value from `.env` in those files. Environment variants, generated password files, databases and SQLite sidecars, runtime folders, and local library copies are ignored. The branch remains `main`. Real integrations and agreement on batch/delivery recovery are still pending.
+Tests cover first-run initialization, empty batches, unsafe filenames, duplicate skipping, batch replay, partial-failure recovery, JSON retry limits, optional link evidence and real PDF conversion without changing the input. Docker/real-model end-to-end validation must be performed on a machine with Docker Desktop; it was not available in the implementation environment.

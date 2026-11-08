@@ -2,14 +2,24 @@ name: infoh420-a3-8
 
 services:
   airflow:
-    image: apache/airflow:slim-3.3.2@sha256:881c35bfb1f6b76d233dd402b7228b5c37003702068b865db5db76061458b2bd
+    build: .
     command: ["airflow", "standalone"]
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
       RESEARCH_LIBRARY_PATH: /opt/airflow/ResearchLibrary
       PAPERS_DB_PATH: ${PAPERS_DB_PATH:-/opt/airflow/data/papers.db}
+<<<<<<< HEAD
       DISCORD_WEBHOOK_API: ${DISCORD_WEBHOOK_API}
+=======
+      LOCAL_LLM_BASE_URL: http://ollama:11434
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen2.5:3b}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_MAX_CHARS: ${LOCAL_LLM_MAX_CHARS:-24000}
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+>>>>>>> 453998ac25a36e23877c160e2562c725b92c7db6
     ports:
       - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
     volumes:
@@ -22,5 +32,30 @@ services:
         bind:
           create_host_path: false
 
+  ollama:
+    image: ollama/ollama:0.11.4
+    volumes:
+      - ollama-models:/root/.ollama
+
+  ollama-init:
+    image: ollama/ollama:0.11.4
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen2.5:3b}
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        attempts=0
+        until ollama list >/dev/null 2>&1; do
+          attempts=$$((attempts + 1))
+          if [ "$$attempts" -ge 60 ]; then exit 1; fi
+          sleep 2
+        done
+        ollama pull "$$LOCAL_LLM_MODEL"
+
 volumes:
   airflow-state:
+  ollama-models:
