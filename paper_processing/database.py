@@ -19,13 +19,11 @@ def connect(db_path: Path):
             summary TEXT NOT NULL,
             keywords TEXT NOT NULL,
             category TEXT NOT NULL,
-            code_urls TEXT NOT NULL,
-            dataset_urls TEXT NOT NULL,
+            code_urls TEXT,
+            dataset_urls TEXT,
             markdown TEXT NOT NULL,
             batch_id TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            html_published_at TEXT,
-            discord_notified_at TEXT
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         db.commit()
         with db:
@@ -67,6 +65,18 @@ def list_papers(db_path: Path) -> list[dict]:
     with connect(db_path) as db:
         papers = [dict(row) for row in db.execute(
             "SELECT * FROM papers ORDER BY created_at, filename"
+        )]
+    for paper in papers:
+        for field in ("keywords", "code_urls", "dataset_urls"):
+            paper[field] = json.loads(paper[field])
+    return papers
+
+def list_papers_by_batch(db_path: Path, batch_id: str) -> list[dict]:
+    """Return only one batch's papers, decoding the three JSON list columns."""
+    with connect(db_path) as db:
+        papers = [dict(row) for row in db.execute(
+            "SELECT * FROM papers WHERE batch_id = ? ORDER BY filename",
+            (batch_id,),
         )]
     for paper in papers:
         for field in ("keywords", "code_urls", "dataset_urls"):

@@ -7,9 +7,14 @@ from .llm import extract_metadata, validate_metadata
 from .pdf import pdf_to_markdown
 
 
+
+
 def process_and_store_papers(
     filenames: list[str], papers_dir: Path, db_path: Path, batch_id: str
 ) -> dict:
+    import logging
+    logger = logging.getLogger(__name__)
+    
     if not isinstance(batch_id, str) or not batch_id.strip():
         raise ValueError("batch_id must be a nonempty, stable identifier")
     papers_dir, db_path = Path(papers_dir), Path(db_path)
@@ -26,6 +31,8 @@ def process_and_store_papers(
         if source.is_symlink() or not source.is_file():
             raise ValueError(f"Not a regular PDF: {name}")
         markdown = pdf_to_markdown(source)
+        logger.info("Markdown extracted for %s: %s", name, markdown[:100])
+
         metadata = validate_metadata(extract_metadata(markdown), markdown)
         store_paper(db_path, name, metadata, markdown, batch_id)
         processed.add(name)

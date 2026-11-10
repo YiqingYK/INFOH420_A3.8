@@ -10,10 +10,11 @@ import pendulum
 from airflow.sdk import dag, task, get_current_context
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
-import sqlite3
 import json
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+
+from paper_processing.database import list_papers, batch_filenames, list_papers_by_batch
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def paper_pipeline():
         max_retry_delay=timedelta(minutes=2),
         execution_timeout=timedelta(minutes=2),
     )
-    def scan_new_papers():
+    def scan_all_papers():
         """List PDFs; storage checks filenames when processing the batch."""
         library_path = os.environ.get("RESEARCH_LIBRARY_PATH")
         if not library_path:
@@ -51,40 +52,6 @@ def paper_pipeline():
             logger.exception("Unable to list PDFs in %s", papers_dir)
             raise
 
-        db_path = os.environ.get("PAPERS_DB_PATH")
-        with sqlite3.connect(db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS processed_papers (
-                    filename TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    keywords TEXT,
-                    github_url TEXT,
-                    dataset_url TEXT,
-                    category TEXT,
-                    processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            #This is just to input a simple test example into the DB if we haven't yet implemented the LLM->DB flow
-            #Remove when we get all tasks ready and integrated
-            #Put a random PDF into the folder with "example.pdf" title before this
-            conn.execute(
-            """
-            INSERT OR IGNORE INTO processed_papers
-                (filename, title, summary, keywords, github_url, dataset_url, category)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-               (
-                    "example.pdf",
-                    "Example paper title",
-                    "A short summary of the paper.",
-                    '["machine learning", "data"]',  # JSON stored as text
-                    None,  # github_url
-                    None,  # dataset_url
-                    "None",  # category
-                )
-            )
         logger.info("Discovered %d PDF files in %s: %s", len(filenames), papers_dir, filenames)
         return filenames
 
@@ -98,16 +65,19 @@ def paper_pipeline():
         if not library_path or not db_path:
             raise AirflowFailException("RESEARCH_LIBRARY_PATH and PAPERS_DB_PATH are required")
         context = get_current_context()
-        return process_and_store_papers(
+        batch_id = f"{context['dag'].dag_id}:{context['run_id']}"
+        logger.info("Processing batch %s", batch_id)
+        process_and_store_papers(
             discovered_filenames,
             Path(library_path) / "papers",
             Path(db_path),
-            batch_id=f"{context['dag'].dag_id}:{context['run_id']}",
+            batch_id=batch_id,
         )
+        return batch_id
 
     @task(retries=0)
     def generate_html():
-        """MOCK. Await Gustavo's HTML generator."""
+        """MOCK. Work in progress."""
 
         library_path = os.environ.get("RESEARCH_LIBRARY_PATH")
         if not library_path:
@@ -118,17 +88,22 @@ def paper_pipeline():
         if not db_path:
             raise AirflowFailException("PAPERS_DB_PATH must be configured")
         
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            all_files_metadata = conn.execute(
-                f"SELECT * FROM processed_papers"
-            ).fetchall()
+        all_files_metadata = list_papers(db_path)
 
         output_dir.mkdir(parents=True, exist_ok=True)
         papers_html = "\n".join(
-            f"<article><h2>{escape(row['title'])}</h2>"
-            f"<p>{escape(row['summary'])}</p>"
-            f"<p>Category: {escape(row['category'] or 'None')}</p></article>"
+            f"<article>"
+            f"<h2>{escape(row['title'])}</h2>"
+            f"<p>Filename: {escape(row['filename'])}</p>"
+            f"<p>Summary: {escape(row['summary'])}</p>"
+            f"<p>Keywords:</p>"
+            f"<ul>{''.join(f'<li>{escape(k)}</li>' for k in (row.get('keywords') or []))}</ul>"
+            f"<p>Category: {escape(row['category'] or 'None')}</p>"
+            f"<p>Code URLs:</p>"
+            f"<ul>{''.join(f'<li>{escape(k)}</li>' for k in (row.get('code_urls') or []))}</ul>"
+            f"<p>Dataset:</p>"
+            f"<ul>{''.join(f'<li>{escape(k)}</li>' for k in (row.get('dataset_urls') or []))}</ul>"
+            f"</article>"
             for row in all_files_metadata
         ) or "<p>No papers found.</p>"
         output_path = output_dir / "output.html"
@@ -142,51 +117,37 @@ def paper_pipeline():
         return str(output_path)
 
     @task(retries=0)
-    def notify_discord(new_filenames):
+    def notify_discord(batch_id):
         """MOCK. Await Gustavo's Discord notifier."""
-        if not new_filenames:
-            raise AirflowSkipException(
-                "MOCK Discord notification skipped: no newly committed paper metadata"
-            )
-
-        db_path = os.environ.get("PAPERS_DB_PATH")
-        if not db_path:
-            raise AirflowFailException("PAPERS_DB_PATH must be configured")
-
 
         webhook_api = os.environ.get("DISCORD_WEBHOOK_API")
         if not webhook_api:
             raise AirflowFailException("DISCORD_WEBHOOK_API must be configured")
-
-        placeholders = ", ".join("?" for new_file in new_filenames)
         
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            new_files_metadata = conn.execute(
-                f"SELECT * FROM processed_papers WHERE filename IN ({placeholders})",
-                tuple(new_filenames),
-            ).fetchall()
+        db_path = os.environ.get("PAPERS_DB_PATH")
+        if not db_path:
+            raise AirflowFailException("PAPERS_DB_PATH must be configured")
 
-#Maybe implement something here about analyzing deletions and renamings?
-#        found_filenames = {row["filename"] for row in new_files_metadata}
-#        missing_filenames = set(new_filenames) - found_filenames
-#        if missing_filenames:
-#            raise AirflowFailException(
-#                f"Paper records not found in the database: {sorted(missing_filenames)}"
-#            )
+        new_papers = list_papers_by_batch(db_path, batch_id)
+        if not new_papers:
+            raise AirflowSkipException(
+                "Discord notification skipped: no newly committed paper metadata"
+            )
+
+        #Maybe implement something here about analyzing deletions and renamings?
         
-        for row in new_files_metadata:
+        for row in new_papers:
             content = (
                 f"New paper: {row['title']}\n"
                 f"Filename: {row['filename']}\n"
                 f"Summary: {row['summary']}\n"
                 f"Keywords: {row['keywords'] or 'None'}\n"
-                f"GitHub: {row['github_url'] or 'None'}\n"
-                f"Dataset: {row['dataset_url'] or 'None'}\n"
+                f"Code URLs: {row['code_urls'] or 'None'}\n"
+                f"Dataset: {row['dataset_urls'] or 'None'}\n"
                 f"Category: {row['category'] or 'None'}"
             )
-            if len(content) > 1000:
-                content = content[:987] + "\n[truncated]"
+            if len(content) > 2000:
+                content = content[:1987] + "\n[truncated]"
 
             request = Request(
                 webhook_api,
@@ -211,10 +172,8 @@ def paper_pipeline():
                 logger.error("Webhook request returned HTTP %s: %s", exc.code, body)
                 raise
             
-    processing_result = process_papers(scan_new_papers())
+    batch_id = process_papers(scan_all_papers())
     generate_html()
-    notify_discord(["example.pdf"]) #Only for testing, must first do the setup in scan_new_papers
-    #notify_discord(processing_result["processed_filenames"])
-
+    notify_discord(batch_id)
 
 paper_pipeline_dag = paper_pipeline()
