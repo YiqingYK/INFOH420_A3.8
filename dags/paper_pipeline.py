@@ -172,8 +172,10 @@ def paper_pipeline():
                 logger.error("Webhook request returned HTTP %s: %s", exc.code, body)
                 raise
             
-    batch_id = process_papers(scan_all_papers())
-    generate_html()
+    process_task = process_papers(scan_all_papers())
+    html_task = generate_html()
+    process_task >> html_task
+    batch_id = process_task
     notify_discord(batch_id)
 
 paper_pipeline_dag = paper_pipeline()
