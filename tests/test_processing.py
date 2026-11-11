@@ -2,12 +2,14 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
 
 from paper_processing import get_processed_filenames, process_and_store_papers
 from paper_processing.database import list_papers, store_paper
-from paper_processing.llm import extract_metadata, validate_metadata
+from paper_processing.llm import SCHEMA, extract_metadata, validate_metadata
 
 
 METADATA = {"title": "Test paper", "summary": "Short summary",
@@ -61,6 +63,10 @@ class ProcessingTests(unittest.TestCase):
         llm.assert_not_called()
 
     @patch("paper_processing.llm.urlopen")
+    @patch.dict("os.environ", {
+        "LOCAL_LLM_PROVIDER": "ollama",
+        "LOCAL_LLM_API": "http://llm.example/api/generate",
+    })
     def test_http_contract_and_json_retry(self, urlopen):
         responses = []
         for content in ("invalid JSON", json.dumps(METADATA)):
@@ -72,11 +78,54 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual(extract_metadata("# Paper")["title"], "Test paper")
         self.assertEqual(urlopen.call_count, 2)
         request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://llm.example/api/generate")
         payload = json.loads(request.data)
         self.assertFalse(payload["stream"])
         self.assertEqual(payload["format"]["type"], "object")
 
     @patch("paper_processing.llm.urlopen")
+    @patch.dict("os.environ", {
+        "LOCAL_LLM_PROVIDER": "openai_compatible",
+        "LOCAL_LLM_API": "http://llm.example/v1/chat/completions",
+        "LOCAL_LLM_MODEL": "test-model",
+        "LOCAL_LLM_API_KEY": "test-key",
+    })
+    def test_openai_compatible_contract(self, urlopen):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "choices": [{"message": {"content": json.dumps(METADATA)}}]
+        }).encode()
+        urlopen.return_value = response
+
+        self.assertEqual(extract_metadata("# Paper")["title"], "Test paper")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://llm.example/v1/chat/completions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        payload = json.loads(request.data)
+        self.assertEqual(payload["model"], "test-model")
+        self.assertEqual(payload["response_format"]["type"], "json_schema")
+        self.assertEqual(payload["response_format"]["json_schema"]["schema"],
+                         SCHEMA)
+        self.assertEqual([message["role"] for message in payload["messages"]],
+                         ["system", "user"])
+
+    @patch("paper_processing.llm.urlopen")
+    @patch.dict("os.environ", {"LOCAL_LLM_PROVIDER": "openai_compatible"})
+    def test_http_error_includes_server_detail_without_retry(self, urlopen):
+        urlopen.side_effect = HTTPError(
+            "http://llm.example/v1/chat/completions",
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=BytesIO(b'{"error":{"message":"response_format unsupported"}}'),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "response_format unsupported"):
+            extract_metadata("Paper")
+        self.assertEqual(urlopen.call_count, 1)
+
+    @patch("paper_processing.llm.urlopen")
+    @patch.dict("os.environ", {"LOCAL_LLM_PROVIDER": "ollama"})
     def test_second_invalid_response_fails(self, urlopen):
         urlopen.return_value.__enter__.return_value.read.return_value = b'{"response":"[]"}'
         with self.assertRaises(ValueError):

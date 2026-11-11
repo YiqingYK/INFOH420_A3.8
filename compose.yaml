@@ -10,13 +10,16 @@ services:
       RESEARCH_LIBRARY_PATH: /opt/airflow/ResearchLibrary
       PAPERS_DB_PATH: ${PAPERS_DB_PATH:-/opt/airflow/data/papers.db}
       DISCORD_WEBHOOK_API: ${DISCORD_WEBHOOK_API}
-      LOCAL_LLM_BASE_URL: "http://ollama:11434"
+      LOCAL_LLM_PROVIDER: ${LOCAL_LLM_PROVIDER:-ollama}
+      LOCAL_LLM_API: ${LOCAL_LLM_API:-http://ollama:11434/api/generate}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
       LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen2.5:3b}
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_MAX_CHARS: ${LOCAL_LLM_MAX_CHARS:-24000}
     depends_on:
       ollama-init:
         condition: service_completed_successfully
+        required: false
     ports:
       - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
     volumes:
@@ -30,11 +33,13 @@ services:
           create_host_path: false
 
   ollama:
+    profiles: ["ollama"]
     image: ollama/ollama:0.11.4
     volumes:
       - ollama-models:/root/.ollama
 
   ollama-init:
+    profiles: ["ollama"]
     image: ollama/ollama:0.11.4
     environment:
       OLLAMA_HOST: http://ollama:11434
