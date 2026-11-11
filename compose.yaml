@@ -6,7 +6,7 @@ services:
     command: ["airflow", "standalone"]
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       RESEARCH_LIBRARY_PATH: /opt/airflow/ResearchLibrary
       PAPERS_DB_PATH: ${PAPERS_DB_PATH:-/opt/airflow/data/papers.db}
       DISCORD_WEBHOOK_API: ${DISCORD_WEBHOOK_API}

@@ -4,7 +4,7 @@ Assignment 3, INFO-H420. Airflow discovers PDFs in a locally synced Google Drive
 
 ## Current scope
 
-Implemented: scheduled discovery, PDF conversion, local LLM extraction, SQLite storage, integration with the processing task and searchable static HTML generation. Discord notifications remain an explicit mock owned by the output integration teammate. The complete assignment is not finished until that integration and the short report are added.
+Implemented: scheduled discovery, PDF conversion, local LLM extraction, SQLite storage, integration with the processing task, searchable static HTML generation, and Discord notification. 
 
 ## Reproducible startup
 
@@ -24,7 +24,7 @@ docker compose exec airflow airflow dags test paper_pipeline
 docker compose exec airflow python -m unittest discover -s /opt/airflow/tests -v
 ```
 
-For the test command, first copy the test folder into the container: `docker compose cp tests airflow:/opt/airflow/tests`. Tests create their own temporary PDFs/database and mock Ollama calls. A DAG test processes real PDFs and stores records; HTML generation writes the static catalog, while Discord requires its webhook configuration.
+For the test command, first copy the test folder into the container: `docker compose cp tests airflow:/opt/airflow/tests`. Tests create their own temporary PDFs/database and mock LLM calls. A DAG test processes real PDFs and stores records; HTML generation writes the static catalog, while Discord requires its webhook configuration.
 
 `docker compose down` retains state. Metadata lives at `./data/papers.db`, outside the synced library. Airflow state has a separate volume. Do not commit databases, `.env`, PDFs or generated passwords.
 
@@ -43,7 +43,7 @@ result = process_and_store_papers(
 )
 ```
 
-Returns `{"status": "complete", "batch_id": "...", "processed_filenames": [...]}` containing all records committed by this batch, including recovered commits on retry. First use initializes the database. Previously committed filenames are skipped without reading the PDF or calling Ollama. Filenames are unique, exact and case sensitive; changing a file under the same filename does not reprocess it. Use a new filename for revised papers.
+Returns `{"status": "complete", "batch_id": "...", "processed_filenames": [...]}` containing all records committed by this batch, including recovered commits on retry. First use initializes the database. Previously committed filenames are skipped without reading the PDF or calling the LLM. Filenames are unique, exact and case sensitive; changing a file under the same filename does not reprocess it. Use a new filename for revised papers.
 
 Each paper commits independently after conversion and validation. If a later paper fails, the exception propagates, completed papers remain committed and downstream tasks do not run. Repeating with the same batch ID recovers earlier commits. An empty batch calls no LLM. The Airflow adapter uses `dag_id:run_id` as the stable identifier. Discovery passes every filename so resumed batches retain their membership; the processing module determines which ones are new.
 
