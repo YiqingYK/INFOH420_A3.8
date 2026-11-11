@@ -1,9 +1,8 @@
-"""Discover and process research PDFs; output integrations remain pending."""
+"""Discover and process research PDFs; Generate HTML page and Discord notification."""
 
 import logging
 import os
 from datetime import timedelta
-from html import escape
 from pathlib import Path
 
 import pendulum
@@ -14,7 +13,8 @@ import json
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-from paper_processing.database import list_papers, batch_filenames, list_papers_by_batch
+from paper_processing.database import list_papers, list_papers_by_batch
+from paper_processing.html import write_paper_catalog
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @dag(
     dag_id="paper_pipeline",
-    description="PDF to Markdown, local LLM metadata and SQLite; pending output tasks",
+    description="PDF to Markdown, local LLM metadata, SQLite and static HTML; Discord pending",
     schedule="0 * * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
@@ -77,41 +77,19 @@ def paper_pipeline():
 
     @task(retries=0)
     def generate_html():
-        """MOCK. Work in progress."""
+        """Publish the searchable static paper catalog."""
 
         library_path = os.environ.get("RESEARCH_LIBRARY_PATH")
         if not library_path:
             raise AirflowFailException("RESEARCH_LIBRARY_PATH must be configured")
-        output_dir = Path(library_path) / "output"
-
         db_path = os.environ.get("PAPERS_DB_PATH")
         if not db_path:
             raise AirflowFailException("PAPERS_DB_PATH must be configured")
         
         all_files_metadata = list_papers(db_path)
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-        papers_html = "\n".join(
-            f"<article>"
-            f"<h2>{escape(row['title'])}</h2>"
-            f"<p>Filename: {escape(row['filename'])}</p>"
-            f"<p>Summary: {escape(row['summary'])}</p>"
-            f"<p>Keywords:</p>"
-            f"<ul>{''.join(f'<li>{escape(k)}</li>' for k in (row.get('keywords') or []))}</ul>"
-            f"<p>Category: {escape(row['category'] or 'None')}</p>"
-            f"<p>Code URLs:</p>"
-            f"<ul>{''.join(f'<li>{escape(k)}</li>' for k in (row.get('code_urls') or []))}</ul>"
-            f"<p>Dataset:</p>"
-            f"<ul>{''.join(f'<li>{escape(k)}</li>' for k in (row.get('dataset_urls') or []))}</ul>"
-            f"</article>"
-            for row in all_files_metadata
-        ) or "<p>No papers found.</p>"
-        output_path = output_dir / "output.html"
-        output_path.write_text(
-            f"<!doctype html><html><head><meta charset=\"utf-8\">"
-            f"<title>Papers</title></head><body><h1>Papers</h1>"
-            f"{papers_html}</body></html>",
-            encoding="utf-8",
+        output_path = write_paper_catalog(
+            all_files_metadata,
+            Path(library_path) / "output" / "index.html",
         )
         logger.info("Generated paper list at %s", output_path)
         return str(output_path)
