@@ -51,7 +51,16 @@ Markdown is stored in the same SQLite record, so no extra file can become incons
 
 ## LLM configuration
 
-Compose uses `LOCAL_LLM_BASE_URL=http://ollama:11434`, the native Ollama `/api/generate` endpoint. No API key or cloud account is needed. `.env` configures `LOCAL_LLM_MODEL` (default `qwen2.5:3b`), `LOCAL_LLM_TIMEOUT` in seconds (300) and `LOCAL_LLM_MAX_CHARS` (24000). After changing models, rerun `docker compose up --build -d` so initialization downloads it.
+Set `LOCAL_LLM_PROVIDER` in `.env` to `ollama` (default) or `openai_compatible`. `COMPOSE_PROFILES=${LOCAL_LLM_PROVIDER:-ollama}` selects the matching Compose profile, so Ollama is not started when using the OpenAI-compatible server. For Ollama, use `LOCAL_LLM_API=http://ollama:11434/api/generate`. To switch to an OpenAI-compatible local server (if you have one), set:
+
+```env
+LOCAL_LLM_PROVIDER=openai_compatible
+LOCAL_LLM_API=http://host.docker.internal:1236/v1/chat/completions
+LOCAL_LLM_MODEL=your-model-name
+LOCAL_LLM_API_KEY=
+```
+
+Set `LOCAL_LLM_API_KEY` if that server requires a key. The server must be reachable from Docker; on the host machine, bind it to an address accessible to Docker rather than only `localhost`. The `openai_compatible` provider sends chat-completions requests with JSON Schema output and extracts the reply from `choices[0].message.content`; Ollama continues using its native generate API and JSON schema. The same model, timeout (300 seconds by default) and input-size (24000 characters) settings apply to both. After changing `.env`, rerun `docker compose up --build -d`.
 
 The request supplies a JSON schema and disables streaming. Required fields are nonempty strings `title`, `summary`, `category`, and a string array `keywords`. Optional `code_urls` and `dataset_urls` default to empty arrays. Invalid response JSON or field types trigger exactly one further generation; HTTP/transport errors propagate. Optional links are retained only when they are HTTP(S) URLs literally present in the full Markdown. Links are classified by their role in the paper, independently of domain: code can be hosted on GitHub, GitLab, university websites or elsewhere. Classification remains a model judgment; the code does not visit links or prove their contents.
 
