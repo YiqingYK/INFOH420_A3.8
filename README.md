@@ -4,7 +4,7 @@ Assignment 3, INFO-H420. Airflow discovers PDFs in a locally synced Google Drive
 
 ## Current scope
 
-Implemented: scheduled discovery, PDF conversion, local LLM extraction, SQLite storage and integration with the processing task. HTML generation and Discord notifications are still explicit mocks owned by the output integration teammate. The complete assignment is not finished until those integrations and the short report are added.
+Implemented: scheduled discovery, PDF conversion, local LLM extraction, SQLite storage, integration with the processing task, searchable static HTML generation, and Discord notification. 
 
 ## Reproducible startup
 
@@ -16,7 +16,7 @@ Run commands from this directory (`INFOH420_A3.8`). Install and start Docker Des
 4. Follow `docker compose logs -f ollama-init airflow`. First startup downloads the model; allow time and disk space. Ollama uses CPU by default, with no GPU required. Its model cache persists in a named volume. Airflow starts after a successful model download.
 5. Open http://localhost:8080, username `admin`. Read the local generated password with `docker compose exec airflow cat /opt/airflow/simple_auth_manager_passwords.json.generated`.
 
-The DAG starts paused, runs hourly in UTC and allows one active run. Keep it paused until HTML and Discord are integrated. For manual checks:
+The DAG starts paused, runs hourly in UTC and allows one active run. Keep it paused until Discord notifications are configured. For manual checks:
 
 ```sh
 docker compose exec airflow airflow dags list-import-errors
@@ -24,7 +24,7 @@ docker compose exec airflow airflow dags test paper_pipeline
 docker compose exec airflow python -m unittest discover -s /opt/airflow/tests -v
 ```
 
-For the test command, first copy the test folder into the container: `docker compose cp tests airflow:/opt/airflow/tests`. Tests create their own temporary PDFs/database and mock Ollama calls. A DAG test processes real PDFs and stores records; output tasks currently skip.
+For the test command, first copy the test folder into the container: `docker compose cp tests airflow:/opt/airflow/tests`. Tests create their own temporary PDFs/database and mock LLM calls. A DAG test processes real PDFs and stores records; HTML generation writes the static catalog, while Discord requires its webhook configuration.
 
 `docker compose down` retains state. Metadata lives at `./data/papers.db`, outside the synced library. Airflow state has a separate volume. Do not commit databases, `.env`, PDFs or generated passwords.
 
@@ -43,7 +43,7 @@ result = process_and_store_papers(
 )
 ```
 
-Returns `{"status": "complete", "batch_id": "...", "processed_filenames": [...]}` containing all records committed by this batch, including recovered commits on retry. First use initializes the database. Previously committed filenames are skipped without reading the PDF or calling Ollama. Filenames are unique, exact and case sensitive; changing a file under the same filename does not reprocess it. Use a new filename for revised papers.
+Returns `{"status": "complete", "batch_id": "...", "processed_filenames": [...]}` containing all records committed by this batch, including recovered commits on retry. First use initializes the database. Previously committed filenames are skipped without reading the PDF or calling the LLM. Filenames are unique, exact and case sensitive; changing a file under the same filename does not reprocess it. Use a new filename for revised papers.
 
 Each paper commits independently after conversion and validation. If a later paper fails, the exception propagates, completed papers remain committed and downstream tasks do not run. Repeating with the same batch ID recovers earlier commits. An empty batch calls no LLM. The Airflow adapter uses `dag_id:run_id` as the stable identifier. Discovery passes every filename so resumed batches retain their membership; the processing module determines which ones are new.
 
@@ -51,7 +51,16 @@ Markdown is stored in the same SQLite record, so no extra file can become incons
 
 ## LLM configuration
 
-Compose uses `LOCAL_LLM_BASE_URL=http://ollama:11434`, the native Ollama `/api/generate` endpoint. No API key or cloud account is needed. `.env` configures `LOCAL_LLM_MODEL` (default `qwen2.5:3b`), `LOCAL_LLM_TIMEOUT` in seconds (300) and `LOCAL_LLM_MAX_CHARS` (24000). After changing models, rerun `docker compose up --build -d` so initialization downloads it.
+Set `LOCAL_LLM_PROVIDER` in `.env` to `ollama` (default) or `openai_compatible`. `COMPOSE_PROFILES=${LOCAL_LLM_PROVIDER:-ollama}` selects the matching Compose profile, so Ollama is not started when using the OpenAI-compatible server. For Ollama, use `LOCAL_LLM_API=http://ollama:11434/api/generate`. To switch to an OpenAI-compatible local server (if you have one), set:
+
+```env
+LOCAL_LLM_PROVIDER=openai_compatible
+LOCAL_LLM_API=http://host.docker.internal:1236/v1/chat/completions
+LOCAL_LLM_MODEL=your-model-name
+LOCAL_LLM_API_KEY=
+```
+
+Set `LOCAL_LLM_API_KEY` if that server requires a key. The server must be reachable from Docker; on the host machine, bind it to an address accessible to Docker rather than only `localhost`. The `openai_compatible` provider sends chat-completions requests with JSON Schema output and extracts the reply from `choices[0].message.content`; Ollama continues using its native generate API and JSON schema. The same model, timeout (300 seconds by default) and input-size (24000 characters) settings apply to both. After changing `.env`, rerun `docker compose up --build -d`.
 
 The request supplies a JSON schema and disables streaming. Required fields are nonempty strings `title`, `summary`, `category`, and a string array `keywords`. Optional `code_urls` and `dataset_urls` default to empty arrays. Invalid response JSON or field types trigger exactly one further generation; HTTP/transport errors propagate. Optional links are retained only when they are HTTP(S) URLs literally present in the full Markdown. Links are classified by their role in the paper, independently of domain: code can be hosted on GitHub, GitLab, university websites or elsewhere. Classification remains a model judgment; the code does not visit links or prove their contents.
 
@@ -63,7 +72,7 @@ Implementation references: [Ollama structured outputs](https://ollama.com/blog/s
 
 `list_papers(db_path)` returns dictionaries with decoded lists for `keywords`, `code_urls` and `dataset_urls`. The `papers` table also contains `filename`, `title`, `summary`, `category`, `markdown`, `batch_id`, `created_at`, `html_published_at` and `discord_notified_at`. The last two nullable columns are reserved for Gustavo's integrations; this module never marks output as delivered.
 
-HTML should read all committed records, escape extracted text, and replace `output/index.html` atomically. Discord should read metadata for the batch filenames. Later runs must also recover records with pending output markers from abandoned batches; the current output mocks do not implement that recovery. HTML and Discord completion must be recorded separately. Discord timeouts can be ambiguous, so notification retries remain disabled pending the team's delivery policy. The database is initialized with the current schema; migrations from older schemas are not supported.
+HTML reads all committed records and atomically replaces `output/index.html` with a self-contained static catalog. It displays each paper's metadata, provides text search across title, filename, summary and keywords, and filters by categories present in the database. Discord should read metadata for the batch filenames. Later runs must also recover records with pending output markers from abandoned batches; the output tasks do not implement that recovery. HTML and Discord completion must be recorded separately. Discord timeouts can be ambiguous, so notification retries remain disabled pending the team's delivery policy. The database is initialized with the current schema; migrations from older schemas are not supported.
 
 XCom contains only filenames and the small processing result. Markdown and full LLM responses never enter XCom. Database uniqueness protects duplicate inserts, and the DAG serializes runs.
 
