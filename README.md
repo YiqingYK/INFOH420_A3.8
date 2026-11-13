@@ -4,7 +4,7 @@ Assignment 3, INFO-H420. Airflow discovers PDFs in a locally synced Google Drive
 
 ## Current scope
 
-Implemented: scheduled discovery, PDF conversion, local LLM extraction, SQLite storage, integration with the processing task, searchable static HTML generation, and Discord notification. 
+Implemented: scheduled discovery, PDF conversion, local LLM extraction, SQLite storage, integration with the processing task, searchable static HTML generation and Discord webhook notifications. Delivery tracking, recovery of pending notifications and the short report remain pending.
 
 ## Reproducible startup
 
@@ -62,7 +62,7 @@ LOCAL_LLM_API_KEY=
 
 Set `LOCAL_LLM_API_KEY` if that server requires a key. The server must be reachable from Docker; on the host machine, bind it to an address accessible to Docker rather than only `localhost`. The `openai_compatible` provider sends chat-completions requests with JSON Schema output and extracts the reply from `choices[0].message.content`; Ollama continues using its native generate API and JSON schema. The same model, timeout (300 seconds by default) and input-size (24000 characters) settings apply to both. After changing `.env`, rerun `docker compose up --build -d`.
 
-The request supplies a JSON schema and disables streaming. Required fields are nonempty strings `title`, `summary`, `category`, and a string array `keywords`. Optional `code_urls` and `dataset_urls` default to empty arrays. Invalid response JSON or field types trigger exactly one further generation; HTTP/transport errors propagate. Optional links are retained only when they are HTTP(S) URLs literally present in the full Markdown. Links are classified by their role in the paper, independently of domain: code can be hosted on GitHub, GitLab, university websites or elsewhere. Classification remains a model judgment; the code does not visit links or prove their contents.
+The request supplies a JSON schema and disables streaming. Required fields are nonempty strings `title`, `summary`, `category`, and a string array `keywords`. Optional `code_urls` and `dataset_urls` default to empty arrays. Invalid response JSON or field types trigger exactly one further generation; transport errors also receive one retry, while HTTP errors propagate immediately. Optional links are retained only when they are HTTP(S) URLs literally present in the full Markdown. Links are classified by their role in the paper, independently of domain: code can be hosted on GitHub, GitLab, university websites or elsewhere. Classification remains a model judgment; the code does not visit links or prove their contents.
 
 Long papers send the first 75% and last 25% of the configured character budget, omitting the middle. The complete Markdown remains stored. This keeps small-model requests bounded but can miss information in the omitted section; character limits do not guarantee a particular token count. Summary quality and performance need checking with the team's real papers.
 
@@ -70,11 +70,11 @@ Implementation references: [Ollama structured outputs](https://ollama.com/blog/s
 
 ## Output integration contract
 
-`list_papers(db_path)` returns dictionaries with decoded lists for `keywords`, `code_urls` and `dataset_urls`. The `papers` table also contains `filename`, `title`, `summary`, `category`, `markdown`, `batch_id`, `created_at`, `html_published_at` and `discord_notified_at`. The last two nullable columns are reserved for Gustavo's integrations; this module never marks output as delivered.
+`list_papers(db_path)` returns dictionaries with decoded lists for `keywords`, `code_urls` and `dataset_urls`. The `papers` table also contains `filename`, `title`, `summary`, `category`, `markdown`, `batch_id` and `created_at`. Output delivery markers are not implemented.
 
-HTML reads all committed records and atomically replaces `output/index.html` with a self-contained static catalog. It displays each paper's metadata, provides text search across title, filename, summary and keywords, and filters by categories present in the database. Discord should read metadata for the batch filenames. Later runs must also recover records with pending output markers from abandoned batches; the output tasks do not implement that recovery. HTML and Discord completion must be recorded separately. Discord timeouts can be ambiguous, so notification retries remain disabled pending the team's delivery policy. The database is initialized with the current schema; migrations from older schemas are not supported.
+HTML reads all committed records and atomically replaces `output/index.html` with a self-contained static catalog. It displays each paper's metadata, provides text search across title, filename, summary and keywords, and filters by categories present in the database. Discord reads metadata for the current batch and sends one webhook message per paper, truncated to 2000 characters. It requires `DISCORD_WEBHOOK_API` and skips delivery when the batch has no new papers. Later runs do not recover pending notifications from earlier batches, and manually rerunning the notification task can duplicate messages already sent. HTML and Discord completion are not recorded. Discord timeouts can be ambiguous, so notification retries remain disabled pending the team's delivery policy. The database is initialized with the current schema; migrations from older schemas are not supported.
 
-XCom contains only filenames and the small processing result. Markdown and full LLM responses never enter XCom. Database uniqueness protects duplicate inserts, and the DAG serializes runs.
+XCom contains only filenames, the batch ID and the HTML output path. Markdown and full LLM responses never enter XCom. Database uniqueness protects duplicate inserts, and the DAG serializes runs.
 
 ## Local verification
 
