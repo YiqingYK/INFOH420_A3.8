@@ -1,6 +1,6 @@
 # Automated research paper library
 
-Assignment 3, INFO-H420. Airflow discovers PDFs in a locally synced Google Drive folder. The processing module converts new PDFs to Markdown, calls local Ollama, validates JSON and commits metadata to SQLite outside Drive.
+Assignment 3, INFO-H420. Airflow discovers PDFs in a locally synced Google Drive folder. The processing module converts new PDFs to Markdown, calls a local model through native Ollama or an OpenAI-compatible endpoint, validates JSON and commits metadata to SQLite outside Drive.
 
 ## Current scope
 
@@ -13,18 +13,27 @@ Run commands from this directory (`INFOH420_A3.8`). Install and start Docker Des
 1. Copy `.env.example` to `.env` (`Copy-Item .env.example .env` in PowerShell, `cp .env.example .env` on macOS/Linux).
 2. Set `RESEARCH_LIBRARY_DIR` to your absolute host folder. On Windows use forward slashes, for example `"C:/Users/you/Google Drive/ResearchLibrary"`. Keep quotes for spaces. Each teammate uses their own ignored `.env`.
 3. Run `docker compose config --quiet`, then `docker compose up --build -d`.
-4. Follow `docker compose logs -f ollama-init airflow`. First startup downloads the model; allow time and disk space. Ollama uses CPU by default, with no GPU required. Its model cache persists in a named volume. Airflow starts after a successful model download.
+4. Follow `docker compose logs -f airflow`. With the Ollama profile enabled, also follow `docker compose logs -f ollama-init`. The first Ollama startup downloads the model into a named volume. Allow time and disk space. Ollama uses CPU by default. For an OpenAI-compatible provider, start the local server separately.
 5. Open http://localhost:8080, username `admin`. Read the local generated password with `docker compose exec airflow cat /opt/airflow/simple_auth_manager_passwords.json.generated`.
 
-The DAG starts paused, runs hourly in UTC and allows one active run. Keep it paused until Discord notifications are configured. For manual checks:
+The DAG runs at minute zero of each hour in UTC, with catchup disabled and at most one active run. The default Compose configuration creates new DAGs **unpaused**. To start a fresh test instance paused, add this to a Compose override before bringing it up:
+
+```yaml
+services:
+  airflow:
+    environment:
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+```
+
+For an existing instance, check the actual pause state in the Airflow UI. For import and unit checks:
 
 ```sh
 docker compose exec airflow airflow dags list-import-errors
-docker compose exec airflow airflow dags test paper_pipeline
+docker compose exec airflow airflow dags list
 docker compose exec airflow python -m unittest discover -s /opt/airflow/tests -v
 ```
 
-For the test command, first copy the test folder into the container: `docker compose cp tests airflow:/opt/airflow/tests`. Tests create their own temporary PDFs/database and mock LLM calls. A DAG test processes real PDFs and stores records; HTML generation writes the static catalog, while Discord requires its webhook configuration.
+For the test command, first copy the test folder into the container: `docker compose cp tests airflow:/opt/airflow/tests`. Tests create their own temporary PDFs/database and mock LLM calls. Run `airflow dags test paper_pipeline` only with a separate test library, SQLite path and output, and a local notification receiver. It executes task code, including model requests and webhook POSTs. The saved timetable run is the evidence for automatic scheduling.
 
 `docker compose down` retains state. Metadata lives at `./data/papers.db`, outside the synced library. Airflow state has a separate volume. Do not commit databases, `.env`, PDFs or generated passwords.
 
@@ -55,6 +64,7 @@ Set `LOCAL_LLM_PROVIDER` in `.env` to `ollama` (default) or `openai_compatible`.
 
 ```env
 LOCAL_LLM_PROVIDER=openai_compatible
+COMPOSE_PROFILES=openai_compatible
 LOCAL_LLM_API=http://host.docker.internal:1236/v1/chat/completions
 LOCAL_LLM_MODEL=your-model-name
 LOCAL_LLM_API_KEY=
@@ -85,4 +95,6 @@ python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 
-Tests cover first-run initialization, empty batches, unsafe filenames, duplicate skipping, batch replay, partial-failure recovery, JSON retry limits, optional link evidence and real PDF conversion without changing the input. Docker/real-model end-to-end validation must be performed on a machine with Docker Desktop; it was not available in the implementation environment.
+Tests cover first-run initialization, empty batches, unsafe filenames, duplicate skipping, batch replay, partial-failure recovery, JSON retry limits, optional link evidence and real PDF conversion without changing the input. On 11 November 2026, an isolated Airflow 3.3.2 timetable run processed one Drive-synchronised PDF with Gemma 4 E2B through LM Studio. All four tasks succeeded on the first attempt in 17.839 seconds. The first model response took 12.105 seconds between request and response log entries. The run produced one SQLite record and one catalog entry. A local HTTP receiver accepted one notification payload with HTTP 204. In a separate step, the generated catalog was copied to shared Drive as `index-e2e-test.html` and verified visible on 12 November. The redesigned renderer was checked with the saved record on 13 November. Real Discord delivery and real-model multi-PDF processing remain unverified.
+
+The original standard Docker build failed to resolve `pymupdf==1.26.7`. The evaluation used an offline image with the same dependency pins. On 13 November, standard and offline no-cache builds both succeeded on Linux ARM64 with the original pins. If the build cannot resolve or download the pinned wheels, check access to the package index and wheel host from Docker and confirm the target platform. A platform-matched, checksum-verified wheel directory can be installed with `pip --no-index --find-links=/path/to/wheels -r requirements.txt`.
