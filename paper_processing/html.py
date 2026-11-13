@@ -75,9 +75,9 @@ def _render_paper(row: Mapping[str, object]) -> str:
         f"<h2>{escape(title)}</h2>"
         f'<p class="filename">{escape(filename) or "Filename unavailable"}</p>'
         f'<section><h3>Summary</h3><p>{escape(summary) or "No summary available."}</p></section>'
-        f'<section><h3>Keywords</h3>{_render_values(keywords)}</section>'
-        f'<section><h3>Code URLs</h3>{_render_urls(row.get("code_urls"))}</section>'
-        f'<section><h3>Dataset URLs</h3>{_render_urls(row.get("dataset_urls"))}</section>'
+        f'<section class="keywords"><h3>Keywords</h3>{_render_values(keywords)}</section>'
+        f'<section class="resources"><h3>Code resources</h3>{_render_urls(row.get("code_urls"))}</section>'
+        f'<section class="resources"><h3>Dataset resources</h3>{_render_urls(row.get("dataset_urls"))}</section>'
         "</article>"
     )
 
@@ -97,7 +97,7 @@ def _render_page(papers: Sequence[Mapping[str, object]]) -> str:
     )
     paper_cards = "".join(_render_paper(paper) for paper in papers)
     empty_message = (
-        '<p class="empty-state" id="empty-state">No papers match your filters.</p>'
+        '<p class="empty-state" id="empty-state">No papers found. Try another search or category.</p>'
     )
 
     return f"""<!doctype html>
@@ -106,101 +106,100 @@ def _render_page(papers: Sequence[Mapping[str, object]]) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Research Paper Library</title>
+  <title>The Research Archive</title>
   <style>
-    :root {{
-      color-scheme: light;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: #172033;
-      background: #f4f6fb;
-      font-synthesis: none;
-      text-rendering: optimizeLegibility;
-      --accent: #3156a4;
-      --muted: #64708a;
-      --border: #e2e7f0;
-    }}
+
+    :root {{ color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #343b35; background: #edeae1; --ink: #343b35; --muted: #676b61; --green: #405c48; --paper: #fffdf6; }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; min-width: 320px; }}
-    .hero {{
-      padding: 3.5rem max(1.25rem, calc((100% - 1120px) / 2));
-      color: white;
-      background: linear-gradient(125deg, #172b52, #3156a4 68%, #5278bd);
-    }}
-    .eyebrow {{ margin: 0 0 .65rem; color: #c9d8fa; font-size: .78rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }}
-    h1 {{ margin: 0; font-size: clamp(2rem, 5vw, 3.25rem); letter-spacing: -.04em; }}
-    .hero p:last-child {{ max-width: 620px; margin: .8rem 0 0; color: #e0e8fa; line-height: 1.65; }}
-    main {{ width: min(1120px, calc(100% - 2.5rem)); margin: 2rem auto 4rem; }}
-    .toolbar {{
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(210px, .42fr);
-      gap: 1rem;
-      padding: 1.25rem;
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      background: white;
-      box-shadow: 0 8px 26px rgb(34 51 84 / 6%);
-    }}
-    label {{ display: grid; gap: .45rem; color: #36435b; font-size: .86rem; font-weight: 650; }}
-    input, select {{
-      width: 100%;
-      min-height: 46px;
-      padding: .7rem .85rem;
-      border: 1px solid #cbd3e1;
-      border-radius: 9px;
-      color: #172033;
-      background: white;
-      font: inherit;
-    }}
-    input:focus, select:focus, a:focus-visible {{ outline: 3px solid #94b5ff; outline-offset: 2px; }}
-    .result-count {{ margin: 1.2rem .15rem; color: var(--muted); font-size: .9rem; }}
-    .paper-list {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1rem; align-items: start; }}
-    .paper-card {{
-      min-width: 0;
-      padding: 1.35rem;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: white;
-      box-shadow: 0 5px 20px rgb(34 51 84 / 5%);
-    }}
-    .paper-category {{ display: inline-block; margin: 0 0 .7rem; padding: .28rem .65rem; border-radius: 99px; color: #294d94; background: #eaf0ff; font-size: .76rem; font-weight: 700; }}
-    h2 {{ margin: 0; font-size: 1.25rem; line-height: 1.4; overflow-wrap: anywhere; }}
-    .filename {{ margin: .35rem 0 1.15rem; color: var(--muted); font-size: .87rem; overflow-wrap: anywhere; }}
-    section {{ margin-top: 1rem; }}
-    h3 {{ margin: 0 0 .35rem; color: #46536c; font-size: .77rem; letter-spacing: .07em; text-transform: uppercase; }}
-    section p, section ul {{ margin: 0; color: #38445a; font-size: .92rem; line-height: 1.6; overflow-wrap: anywhere; }}
-    ul {{ padding-left: 1.2rem; }}
-    li + li {{ margin-top: .2rem; }}
-    a {{ color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }}
-    .muted, .empty-state {{ color: var(--muted); }}
-    .empty-state {{ padding: 2rem; border: 1px dashed #cbd3e1; border-radius: 14px; text-align: center; background: white; }}
+    body {{ margin: 0; min-width: 320px; background-image: linear-gradient(#63765b0d 1px, transparent 1px), linear-gradient(90deg, #63765b0d 1px, transparent 1px); background-size: 24px 24px; }}
+    .hero {{ padding: 0 max(1.5rem, calc((100% - 1180px) / 2)); border-bottom: 1px solid #ccc9ba; background: #f6f3e9; }}
+    .topbar {{ display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1.3rem 0; border-bottom: 1px solid #d9d5c8; font: .68rem "Courier New", monospace; letter-spacing: .1em; }}
+    .brand {{ display: flex; align-items: center; gap: .7rem; font-weight: bold; }}
+    .crest {{ width: 21px; height: 25px; border: 1.5px solid var(--green); background: repeating-linear-gradient(transparent 0 5px, #80917a 5px 6px); box-shadow: 3px 3px 0 #d7ddcc; }}
+    .status {{ color: var(--muted); font-size: .62rem; }}
+    .hero-content {{ display: grid; grid-template-columns: 1fr 245px; align-items: center; gap: 3rem; padding: 3rem 0 3.5rem; }}
+    .eyebrow {{ margin: 0 0 1rem; color: #72745f; font: .68rem "Courier New", monospace; letter-spacing: .12em; text-transform: uppercase; }}
+    h1 {{ margin: 0; font: normal clamp(3rem, 6vw, 5.4rem)/1.03 Georgia, "Times New Roman", serif; letter-spacing: -.055em; }}
+    h1 span {{ color: var(--green); font-style: italic; }}
+    .intro {{ max-width: 500px; margin: 1.4rem 0 0; font-size: .95rem; line-height: 1.8; color: #62675d; }}
+    .desk-note {{ position: relative; padding: 2rem 1.5rem 1.5rem; background: #f1df9e; box-shadow: 2px 6px 12px #514a351c; transform: rotate(3deg); color: #514c34; }}
+    .desk-note::before {{ content: ""; position: absolute; width: 85px; height: 25px; background: #d1c5a099; top: -12px; left: calc(50% - 42px); transform: rotate(-6deg); }}
+    .note-caption {{ display: block; font: .63rem "Courier New", monospace; letter-spacing: .06em; }}
+    .desk-note strong {{ display: block; margin: .6rem 0; font: normal 3.8rem/1 Georgia, serif; }}
+    .desk-note p {{ margin: .7rem 0 0; padding-top: .8rem; border-top: 1px solid #b6a76d; font: italic 1rem/1.5 Georgia, serif; }}
+    main {{ width: min(1180px, calc(100% - 3rem)); margin: 2rem auto 3rem; }}
+    .toolbar {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .4fr); gap: 1.5rem; padding: 1.3rem 1.5rem; border: 1px solid #d0cbbb; background: #f8f6ed; box-shadow: 0 2px 3px #423e3010; }}
+    label {{ display: grid; gap: .6rem; color: #5e6756; font: bold .65rem "Courier New", monospace; text-transform: uppercase; letter-spacing: .08em; }}
+    input, select {{ width: 100%; min-height: 46px; border: 1px solid #bcbfae; border-radius: 2px; padding: .8rem; color: var(--ink); background: #fffdf7; font: .9rem "Segoe UI", Arial, sans-serif; }}
+    input::placeholder {{ color: #727668; }}
+    input:focus-visible, select:focus-visible, a:focus-visible {{ outline: 3px solid #66866a; outline-offset: 3px; }}
+    .collection-heading {{ display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .7rem; margin: 2.5rem 0 1.5rem; border-bottom: 1px solid #c9c6b8; padding-bottom: .9rem; }}
+    .collection-heading h2 {{ margin: 0; font: normal 1.6rem Georgia, serif; }}
+    .result-count {{ margin: 0; color: var(--muted); font: .68rem "Courier New", monospace; }}
+    .paper-list {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1.6rem; align-items: start; }}
+    .paper-card {{ --tab: #d9e1cf; position: relative; min-width: 0; padding: 1.5rem; border: 1px solid #d6d0bf; background: var(--paper); box-shadow: 2px 3px 0 #e1ddcf, 2px 4px 0 #cbc6b6, 0 8px 16px #554e3510; transition: box-shadow .18s ease; }}
+    .paper-card:nth-child(3n + 2) {{ --tab: #eadcc7; }}
+    .paper-card:nth-child(3n) {{ --tab: #d9e2e6; }}
+    .paper-card::before {{ content: "READING NOTE / PDF"; display: block; padding-bottom: .8rem; margin-bottom: 1.1rem; border-bottom: 1px solid #dedbcd; color: #777a69; font: .6rem "Courier New", monospace; letter-spacing: .1em; }}
+    .paper-card::after {{ content: ""; position: absolute; top: -7px; right: 20px; width: 13px; height: 30px; border: 2px solid #899084; border-radius: 8px; transform: rotate(9deg); }}
+    .paper-card:hover {{ box-shadow: 2px 3px 0 #e1ddcf, 2px 4px 0 #b9b49f, 0 10px 20px #554e3520; }}
+    .paper-category {{ display: inline-block; max-width: 100%; margin: 0 0 1rem; padding: .35rem .6rem; background: var(--tab); color: #4d594c; font: .65rem/1.5 "Courier New", monospace; overflow-wrap: anywhere; }}
+    .paper-card h2 {{ margin: 0; font: normal 1.5rem/1.3 Georgia, serif; letter-spacing: -.025em; overflow-wrap: anywhere; }}
+    .filename {{ margin: .7rem 0 1.2rem; color: var(--muted); font: .67rem/1.7 "Courier New", monospace; overflow-wrap: anywhere; }}
+    section {{ margin-top: 1.2rem; }}
+    h3 {{ margin: 0 0 .6rem; color: #73765d; font: bold .62rem "Courier New", monospace; letter-spacing: .1em; text-transform: uppercase; }}
+    section p, section ul {{ margin: 0; font-size: .88rem; line-height: 1.85; overflow-wrap: anywhere; }}
+    ul {{ padding-left: 1.1rem; }}
+    li + li {{ margin-top: .35rem; }}
+    .keywords ul {{ display: flex; flex-wrap: wrap; gap: .4rem; padding: 0; list-style: none; }}
+    .keywords li {{ margin: 0; padding: .1rem .35rem; background: #f0ecd6; color: #636347; font: .68rem/1.6 "Courier New", monospace; }}
+    .resources {{ padding-top: 1rem; border-top: 1px dashed #ccc8b7; }}
+    a {{ color: #3e644d; text-decoration-thickness: 1px; text-underline-offset: 3px; }}
+    a:hover {{ color: #854c34; }}
+    .muted {{ color: var(--muted); font: .7rem "Courier New", monospace; }}
+    .empty-state {{ padding: 3rem 1.5rem; border: 1px dashed #a9ad98; background: #f8f6eb; text-align: center; font: italic 1.2rem/1.7 Georgia, serif; }}
+    footer {{ display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-top: 3rem; padding-top: 1.3rem; border-top: 1px solid #c9c6b8; color: #6d7262; font: .6rem/1.8 "Courier New", monospace; letter-spacing: .07em; }}
     [hidden] {{ display: none !important; }}
-    @media (max-width: 620px) {{
-      .hero {{ padding-top: 2.5rem; padding-bottom: 2.5rem; }}
-      .toolbar {{ grid-template-columns: 1fr; }}
-    }}
+    @media (prefers-reduced-motion: reduce) {{ .paper-card {{ transition: none; }} }}
+    @media (max-width: 700px) {{ .hero {{ padding: 0 1.25rem; }} .hero-content {{ grid-template-columns: 1fr; gap: 2rem; padding: 2rem 0; }} .desk-note {{ max-width: 260px; transform: none; }} h1 {{ font-size: clamp(3rem, 11vw, 4.5rem); }} main {{ width: calc(100% - 2.5rem); }} .toolbar {{ grid-template-columns: 1fr; gap: 1.2rem; padding: 1.1rem; }} .status {{ max-width: 110px; text-align: right; line-height: 1.5; }} }}
   </style>
 </head>
 <body>
   <header class="hero">
-    <p class="eyebrow">Research library</p>
-    <h1>Explore the papers</h1>
-    <p>Browse paper summaries, keywords, categories, and related code and dataset links.</p>
+    <div class="topbar">
+      <div class="brand"><span class="crest" aria-hidden="true"></span> FIELDNOTES / RESEARCH LIBRARY</div>
+      <span class="status">PERSONAL RESEARCH LIBRARY</span>
+    </div>
+    <div class="hero-content">
+      <div>
+        <p class="eyebrow">Notes, references &amp; things worth keeping</p>
+        <h1>A desk for<br><span>curious minds.</span></h1>
+        <p class="intro">Your papers, gathered in one quiet corner. Browse your reading notes, follow a reference, and pick up where curiosity left off.</p>
+      </div>
+      <aside class="desk-note" aria-label="Collection size">
+        <span class="note-caption">ON THE RESEARCH DESK</span>
+        <strong>{len(papers):02d}</strong>
+        <span class="note-caption">PAPERS FILED &amp; READY TO EXPLORE</span>
+        <p>Good ideas start<br>with a little curiosity.</p>
+      </aside>
+    </div>
   </header>
   <main>
     <div class="toolbar" aria-label="Paper filters">
-      <label for="paper-search">Search papers
+      <label for="paper-search">01 / Search the archive
         <input id="paper-search" type="search" placeholder="Search title, filename, summary, or keywords" autocomplete="off">
       </label>
-      <label for="category-filter">Category
+      <label for="category-filter">02 / Choose a discipline
         <select id="category-filter">
           <option value="">All categories</option>
           {category_options}
         </select>
       </label>
     </div>
-    <p class="result-count" id="result-count" aria-live="polite"></p>
+    <div class="collection-heading"><h2>The reading pile</h2><p class="result-count" id="result-count" aria-live="polite"></p></div>
     <div class="paper-list" id="paper-list">{paper_cards}</div>
     {empty_message}
+    <footer><span>FIELDNOTES / RESEARCH LIBRARY &mdash; RESEARCH LIBRARY</span><span>KEEP READING. KEEP CONNECTING.</span></footer>
   </main>
   <script>
     const searchInput = document.getElementById("paper-search");
