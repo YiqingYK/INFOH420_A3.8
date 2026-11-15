@@ -16,6 +16,8 @@ Run commands from this directory (`INFOH420_A3.8`). Install and start Docker Des
 4. Follow `docker compose logs -f airflow`. With the Ollama profile enabled, also follow `docker compose logs -f ollama-init`. The first Ollama startup downloads the model into a named volume. Allow time and disk space. Ollama uses CPU by default. For an OpenAI-compatible provider, start the local server separately.
 5. Open http://localhost:8080, username `admin`. Read the local generated password with `docker compose exec airflow cat /opt/airflow/simple_auth_manager_passwords.json.generated`.
 
+Set `DISCORD_WEBHOOK_API` privately in `.env` before a full pipeline run. A blank value causes `notify_discord` to fail even when no new papers are found. For isolated tests, point it to a local HTTP receiver.
+
 The DAG runs at minute zero of each hour in UTC, with catchup disabled and at most one active run. The default Compose configuration creates new DAGs **unpaused**. To start a fresh test instance paused, add this to a Compose override before bringing it up:
 
 ```yaml
@@ -94,6 +96,8 @@ With Python and the pinned dependencies:
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
+
+Native Ollama with `qwen2.5:3b` is the configured default. End-to-end validation of that configuration remains open.
 
 Tests cover first-run initialization, empty batches, unsafe filenames, duplicate skipping, batch replay, partial-failure recovery, JSON retry limits, optional link evidence and real PDF conversion without changing the input. On 11 November 2026, an isolated Airflow 3.3.2 timetable run processed one Drive-synchronised PDF with Gemma 4 E2B through LM Studio. All four tasks succeeded on the first attempt in 17.839 seconds. The first model response took 12.105 seconds between request and response log entries. The run produced one SQLite record and one catalog entry. A local HTTP receiver accepted one notification payload with HTTP 204. In a separate step, the generated catalog was copied to shared Drive as `index-e2e-test.html` and verified visible on 12 November. The redesigned renderer was checked with the saved record on 13 November. Real Discord delivery and real-model multi-PDF processing remain unverified.
 
